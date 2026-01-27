@@ -1,0 +1,25 @@
+Checks: >-
+    -*,
+    bugprone-assert-side-effect,
+    bugprone-bool-pointer-implicit-conversion,
+    bugprone-misplaced-widening-cast,
+    bugprone-string-constructor,
+    bugprone-string-integer-assignment,
+    bugprone-unused-raii,
+    bugprone-use-after-move,
+    bugprone-move-forwarding-reference,
+    performance-implicit-conversion-in-loop,
+    performance-inefficient-vector-operation,
+    performance-move-const-arg,
+    performance-no-automatic-move,
+    performance-unnecessary-value-param,
+    readability-implicit-bool-conversion,
+
+WarningsAsErrors: "*"
+HeaderFilterRegex: ".*"
+UseColor: true
+CheckOptions:
+    readability-implicit-bool-conversion.AllowIntegerConditions: 'false'
+    readability-implicit-bool-conversion.AllowPointerConditions: 'true'
+    performance-move-const-arg.CheckTriviallyCopyableMove: 'false'
+
