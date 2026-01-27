@@ -7,7 +7,6 @@
 #include "descend/stage_styles.hpp"
 
 #include <algorithm>
-#include <alloca.h>
 #include <cstddef>
 #include <functional>
 #include <optional>
@@ -578,7 +577,18 @@ struct swizzle_stage
 {
     static constexpr auto style = stage_styles::incremental_to_incremental;
 
-    // No filter of duplicates, no checking that all args are there
+    static_assert(sizeof...(Is) != 0,
+            "At least one index should be provided for swizzle stage");
+
+    static constexpr bool check_distinct()
+    {
+        std::size_t indices[] = {Is...};
+        const auto b = std::begin(indices),
+                   e = std::end  (indices);
+        std::sort(b, e);
+        return std::adjacent_find(b, e) == e;
+    }
+    static_assert(check_distinct(), "Indices have duplicate elements in swizzle stage");
 
     template <class Args>
     static constexpr auto swizzle(Args&& args)
@@ -606,6 +616,14 @@ struct swizzle_stage
     template <class Input>
     constexpr auto make_impl()
     {
+        using decayed_input = std::remove_cvref_t<Input>;
+        static_assert(is_specialization_of_v<args, decayed_input>,
+                "swizzle stage works with args<> only, check previous stage's output");
+
+        constexpr auto args_count = std::tuple_size_v<typename decayed_input::tuple_type>;
+        static_assert(((Is < args_count) && ...),
+                "All indices in swizzle stage should be less than number of arguments from the previous stage");
+
         return impl<Input>{};
     }
 };
