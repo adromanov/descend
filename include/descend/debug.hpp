@@ -71,12 +71,29 @@ struct indent
     }
 };
 
+// Usually StageImpl provides stage_type alias to corresponding stage, which has style.
+// Some stages (currently the ones, using base_accumulate_stage) have 2 aliases:
+// * stage_type to get processig style from
+// * display_stage_type to output display name
+template <class StageImpl>
+struct display_stage_type_for_impl
+{
+    using type = typename StageImpl::stage_type;
+};
+template <class StageImpl>
+    requires requires { typename StageImpl::display_stage_type; }
+struct display_stage_type_for_impl<StageImpl>
+{
+    using type = typename StageImpl::display_stage_type;
+};
+
 // Default debug print for any stage - prints basic info
 template <class StageImpl>
 void debug_print_stage_default(std::ostream& strm, const std::size_t depth, const std::size_t index)
 {
-    using stage_type = typename StageImpl::stage_type;
-    strm << indent(depth) << '#' << index << " stage: " << std::quoted(type_name<StageImpl>()) << ' ' << stage_type::style << '\n';
+    using display_stage_type = typename display_stage_type_for_impl<StageImpl>::type;
+    constexpr auto style = StageImpl::stage_type::style;
+    strm << indent(depth) << '#' << index << " stage: " << std::quoted(type_name<display_stage_type>()) << ' ' << style << '\n';
     strm << indent(depth) << "input: " << std::quoted(type_name<typename StageImpl::input_type>()) << '\n';
     strm << indent(depth) << "output: " << std::quoted(type_name<typename StageImpl::output_type>()) << '\n';
 }

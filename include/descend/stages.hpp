@@ -5,6 +5,7 @@
 #include "descend/helpers.hpp"
 #include "descend/iterate.hpp"
 #include "descend/stage_styles.hpp"
+#include "descend/stages/accumulate.hpp" // IWYU pragma: export
 
 #include <algorithm>
 #include <cstddef>
@@ -189,41 +190,6 @@ struct take_n_stage
     constexpr auto make_impl()
     {
         return impl<Input>{n};
-    }
-};
-
-
-struct max_stage
-{
-    static constexpr auto style = stage_styles::incremental_to_complete;
-
-    template <class Input>
-    struct impl
-    {
-        using input_type = Input;
-        using output_type = std::optional<std::remove_cvref_t<Input>>;
-        using stage_type = max_stage;
-
-        output_type max;
-
-        template <class Next>
-        constexpr void process_incremental(Input&& input, Next&&)
-        {
-            if (!max || *max < input) {
-                max = (Input&&) input;
-            }
-        }
-        template <class Next>
-        constexpr decltype(auto) end(Next&& next)
-        {
-            return next.process_complete(std::move(max));
-        }
-    };
-
-    template <class Input>
-    constexpr auto make_impl()
-    {
-        return impl<Input>{};
     }
 };
 
@@ -834,95 +800,6 @@ struct sort_stage
     }
 };
 
-template <class Init = unit, class Op = std::plus<>>
-struct accumulate_stage
-{
-    static constexpr auto style = stage_styles::incremental_to_complete;
-
-    [[no_unique_address]]
-    Init init;
-    [[no_unique_address]]
-    Op op;
-
-    template <class Input>
-    struct impl
-    {
-        using input_type = Input;
-        using output_type = std::conditional_t<std::is_same_v<Init, unit>, std::remove_cvref_t<Input>, Init>;
-        using stage_type = accumulate_stage;
-
-        [[no_unique_address]]
-        output_type init;
-        [[no_unique_address]]
-        Op op;
-
-        template <class Next>
-        constexpr void process_incremental(Input&& input, Next&&)
-        {
-            init = op(std::move(init), (Input&&) input);
-        }
-        template <class Next>
-        constexpr auto end(Next&& next)
-        {
-            return next.process_complete(std::forward<output_type>(init));
-        }
-    };
-
-    template <class Input>
-    constexpr auto make_impl() &&
-    {
-        if constexpr (std::is_same_v<Init, unit>) {
-            return impl<Input>{ {}, (Op&&) op };
-        }
-        else {
-            return impl<Input>{ std::move(init), (Op&&) op };
-        }
-    }
-
-    template <class Input>
-    constexpr auto make_impl() &
-    {
-        if constexpr (std::is_same_v<Init, unit>) {
-            return impl<Input>{ {}, op };
-        }
-        else {
-            return impl<Input>{ init, op };
-        }
-    }
-};
-
-struct count_stage
-{
-    static constexpr auto style = stage_styles::incremental_to_complete;
-
-    template <class Input>
-    struct impl
-    {
-        using input_type = Input;
-        using output_type = std::size_t;
-        using stage_type = count_stage;
-
-        std::size_t count = 0;
-
-        template <class Next>
-        constexpr void process_incremental(Input&&, Next&&)
-        {
-            ++count;
-        }
-        template <class Next>
-        constexpr auto end(Next&& next)
-        {
-            // next stage accepts std::size_t&&
-            return next.process_complete(std::move(count));
-        }
-    };
-    template <class Input>
-    constexpr auto make_impl()
-    {
-        return impl<Input>{};
-    }
-};
-
 
 template <class Index>
 struct enumerate_stage
@@ -986,10 +863,6 @@ constexpr auto take_n(const std::size_t n)
 {
     return detail::stages::take_n_stage{n};
 }
-constexpr auto max()
-{
-    return detail::stages::max_stage{};
-}
 template <template <class...> class Cont>
 constexpr auto to()
 {
@@ -1048,15 +921,6 @@ template <class Comp = std::less<>>
 constexpr auto stable_sort(Comp&& comp = {})
 {
     return detail::stages::sort_stage<Comp, true>{(Comp&&) comp};
-}
-template <class Init = detail::unit, class Op = std::plus<>>
-constexpr auto accumulate(Init init = {}, Op&& op = {})
-{
-    return detail::stages::accumulate_stage<Init, Op>{std::move(init), (Op&&) op};
-}
-constexpr auto count()
-{
-    return detail::stages::count_stage{};
 }
 template <class Index = int>
 constexpr auto enumerate(Index start = {})

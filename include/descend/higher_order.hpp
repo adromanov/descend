@@ -43,6 +43,8 @@ struct tee_stage
         using input_type = Input;
         using output_type = decltype(make_result_tuple(std::declval<chains_tuple&>()));
         using stage_type = tee_stage;
+        using display_stage_type = struct tee_stage_; // display type would be just 'tee_stage_'
+                                                      // instead of 'tee_stage<lots of other types...>'
 
         template <class Next>
         constexpr void process_incremental(Input&& input, Next&&)
@@ -133,6 +135,8 @@ struct map_group_by_stage
         using input_type = Input;
         using output_type = prepend_key_to_args_t<key_ref_type, chain_result_type>;
         using stage_type = map_group_by_stage;
+        using display_stage_type = struct map_group_by_stage_; // display name would be just 'map_group_by_stage_'
+                                                               // instead of 'map_group_by_stage<lots of other types...>'
 
         Map<key_type, chain_type> chains = {};
 
