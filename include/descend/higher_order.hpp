@@ -4,7 +4,9 @@
 #include "descend/chain.hpp"
 #include "descend/iterate.hpp"
 
+#include <optional>
 #include <type_traits>
+#include <utility>
 
 namespace descend {
 namespace detail::stages {
@@ -145,7 +147,7 @@ struct map_group_by_stage
             ComposedChain& composed_chain;
             operator chain_type () &&
             {
-                return make_subchain_for_input<Input>(composed_chain);
+                return make_subchain_for_input<Input &&>(composed_chain);
             }
         };
 
@@ -194,6 +196,108 @@ struct map_group_by_stage
     }
 };
 
+// Consecutive grouping stage - groups consecutive elements with the same key.
+// Unlike map_group_by which collects all elements globally, group_by emits
+// groups as they complete (when the key changes).
+//
+// Example:
+//   Input: [1, 1, 2, 2, 2, 1, 3, 3]
+//   With key = identity, groups emitted:
+//     args<1, result_for_[1,1]>
+//     args<2, result_for_[2,2,2]>
+//     args<1, result_for_[1]>       <- 1 appears again as new consecutive run
+//     args<3, result_for_[3,3]>
+template <class KeyGetter, class ComposedChain>
+struct group_by_stage
+{
+    static constexpr auto style = stage_styles::incremental_to_incremental;
+
+    [[no_unique_address]]
+    KeyGetter key_getter;
+    [[no_unique_address]]
+    ComposedChain composed_chain;
+
+    template <class Input>
+    struct impl
+    {
+        [[no_unique_address]]
+        KeyGetter key_getter;
+
+        [[no_unique_address]]
+        ComposedChain composed_chain;
+
+        // The type of chain we would get after decomposing ComposedChain
+        using chain_type = decltype(make_subchain_for_input<Input &&>(std::declval<ComposedChain&>()));
+
+        // aggregation key: result of invoking KeyGetter with const Input&
+        using key_type = std::remove_cvref_t<std::invoke_result_t<KeyGetter&, const std::remove_cvref_t<Input>&>>;
+
+        // result of calling chain.end()
+        using chain_result_type = std::remove_cvref_t<subchain_end_t<chain_type>>;
+
+        using input_type = Input;
+        using output_type = prepend_key_to_args_t<key_type&&, chain_result_type>;
+        using stage_type = group_by_stage;
+        using display_stage_type = struct group_by_stage_; // display name
+
+        // Current group state: key and its processing chain
+        // std::nullopt means no group started yet
+        std::optional<std::pair<key_type, chain_type>> current_group = {};
+
+        template <class Next>
+        constexpr void emit_current_group(Next&& next)
+        {
+            if (current_group.has_value()) {
+                auto& [key, chain] = *current_group;
+                // Call chain.end() and prepend key, like map_group_by does
+                args_invoke([&] <class... Args> (Args&&... args) {
+                    next.process_incremental({std::move(key), (Args&&) args...});
+                }, chain.get(detail::index<0>{}).end());
+            }
+        }
+
+        template <class Next>
+        constexpr void process_incremental(Input&& input, Next&& next)
+        {
+            auto&& key = std::invoke(key_getter, std::as_const(input));
+
+            // If we have first element or key is different from the last one
+            if (!current_group.has_value() || (current_group->first != key)) {
+                // Emit group if not empty
+                emit_current_group(next);
+                // Create new chain for new group
+                current_group.emplace(
+                    std::forward<decltype(key)>(key),
+                    make_subchain_for_input<Input &&>(composed_chain)
+                );
+            }
+
+            // Process element in current group's chain
+            current_group->second.get(detail::index<0>{}).process_incremental((Input&&) input);
+        }
+
+        template <class Next>
+        constexpr auto end(Next&& next)
+        {
+            // Emit final group if any
+            emit_current_group(next);
+            return next.end();
+        }
+    };
+
+    template <class Input>
+    constexpr auto make_impl() &&
+    {
+        return impl<Input>{ (KeyGetter&&) key_getter, (ComposedChain&&) composed_chain };
+    }
+
+    template <class Input>
+    constexpr auto make_impl() &
+    {
+        return impl<Input>{ key_getter, composed_chain };
+    }
+};
+
 } // namespace detail::stages
 
 inline namespace stages {
@@ -212,6 +316,15 @@ constexpr auto map_group_by(KeyGetter&& key_getter, Stages&&... stages)
     auto composed_chain = descend::compose((Stages&&) stages...);
     using composed_chain_type = decltype(composed_chain);
     return detail::stages::map_group_by_stage<Map, KeyGetter, composed_chain_type>{
+        (KeyGetter&&) key_getter, std::move(composed_chain) };
+}
+
+template <class KeyGetter, class... Stages>
+constexpr auto group_by(KeyGetter&& key_getter, Stages&&... stages)
+{
+    auto composed_chain = descend::compose((Stages&&) stages...);
+    using composed_chain_type = decltype(composed_chain);
+    return detail::stages::group_by_stage<KeyGetter, composed_chain_type>{
         (KeyGetter&&) key_getter, std::move(composed_chain) };
 }
 

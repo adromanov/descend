@@ -3,6 +3,7 @@
 #include "descend/descend.hpp"
 
 #include <algorithm>
+#include <functional>
 #include <map>
 #include <string>
 #include <vector>
@@ -243,6 +244,149 @@ TEST_CASE("tee with compositions")
     CHECK(count == 12);
     CHECK(max.has_value());
     CHECK(max == "8");
+}
+
+// Helper to convert args<A, B> to std::pair<A, B>
+// Will be replaced by a proper dd::make_pair() stage later
+constexpr auto to_pair()
+{
+    return dd::transform([](auto&& a, auto&& b) {
+        return std::make_pair(std::forward<decltype(a)>(a), std::forward<decltype(b)>(b));
+    });
+}
+
+TEST_CASE("group_by consecutive runs")
+{
+    // Input: [1, 1, 2, 2, 2, 1, 3, 3]
+    // Expected groups: [1,1], [2,2,2], [1], [3,3]
+    std::vector<std::pair<int, std::vector<int>>> result;
+
+    dd::apply(
+        std::vector{1, 1, 2, 2, 2, 1, 3, 3},
+        dd::group_by(
+            std::identity(),
+            dd::to<std::vector>()
+        ),
+        to_pair(),
+        dd::for_each([&result](std::pair<int, std::vector<int>> p) {
+            result.push_back(std::move(p));
+        })
+    );
+
+    REQUIRE(result.size() == 4);
+    CHECK(result[0] == std::pair{1, std::vector{1, 1}});
+    CHECK(result[1] == std::pair{2, std::vector{2, 2, 2}});
+    CHECK(result[2] == std::pair{1, std::vector{1}});  // 1 appears again!
+    CHECK(result[3] == std::pair{3, std::vector{3, 3}});
+}
+
+TEST_CASE("group_by with count - run length encoding")
+{
+    // Input: "aaabbc"
+    // Expected: [(a,3), (b,2), (c,1)]
+    auto result = dd::apply(
+        std::string{"aaabbc"},
+        dd::group_by(
+            std::identity(),
+            dd::count()
+        ),
+        to_pair(),
+        dd::to<std::vector>()
+    );
+
+    REQUIRE(result.size() == 3);
+    CHECK(result[0] == std::pair{'a', std::size_t{3}});
+    CHECK(result[1] == std::pair{'b', std::size_t{2}});
+    CHECK(result[2] == std::pair{'c', std::size_t{1}});
+}
+
+TEST_CASE("group_by single element groups")
+{
+    auto result = dd::apply(
+        std::vector{1, 2, 3, 4, 5},
+        dd::group_by(
+            std::identity(),
+            dd::count()
+        ),
+        to_pair(),
+        dd::to<std::vector>()
+    );
+
+    REQUIRE(result.size() == 5);
+    for (const auto& [key, count] : result) {
+        CHECK(count == 1);
+    }
+}
+
+TEST_CASE("group_by single group")
+{
+    auto result = dd::apply(
+        std::vector{1, 1, 1, 1, 1},
+        dd::group_by(
+            std::identity(),
+            dd::to<std::vector>()
+        ),
+        to_pair(),
+        dd::to<std::vector>()
+    );
+
+    REQUIRE(result.size() == 1);
+    CHECK(result[0] == std::pair{1, std::vector{1, 1, 1, 1, 1}});
+}
+
+TEST_CASE("group_by empty input")
+{
+    auto result = dd::apply(
+        std::vector<int>{},
+        dd::group_by(
+            std::identity(),
+            dd::count()
+        ),
+        to_pair(),
+        dd::to<std::vector>()
+    );
+
+    CHECK(result.empty());
+}
+
+TEST_CASE("group_by with transform in subchain")
+{
+    auto result = dd::apply(
+        std::vector{1, 1, 2, 2, 3},
+        dd::group_by(
+            std::identity(),
+            dd::transform([](int x) { return x * 10; }),
+            dd::to<std::vector>()
+        ),
+        to_pair(),
+        dd::to<std::vector>()
+    );
+
+    REQUIRE(result.size() == 3);
+    CHECK(result[0] == std::pair{1, std::vector{10, 10}});
+    CHECK(result[1] == std::pair{2, std::vector{20, 20}});
+    CHECK(result[2] == std::pair{3, std::vector{30}});
+}
+
+TEST_CASE("group_by with key extractor")
+{
+    struct Item { int category; int value; };
+
+    auto result = dd::apply(
+        std::vector<Item>{{1, 10}, {1, 20}, {2, 30}, {2, 40}, {1, 50}},
+        dd::group_by(
+            &Item::category,
+            dd::transform([](const Item& item) { return item.value; }),
+            dd::to<std::vector>()
+        ),
+        to_pair(),
+        dd::to<std::vector>()
+    );
+
+    REQUIRE(result.size() == 3);
+    CHECK(result[0] == std::pair{1, std::vector{10, 20}});
+    CHECK(result[1] == std::pair{2, std::vector{30, 40}});
+    CHECK(result[2] == std::pair{1, std::vector{50}});
 }
 
 } // namespace anonymous

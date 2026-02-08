@@ -191,6 +191,22 @@ struct custom_debug_printer<stages::map_group_by_stage<Map, KeyGetter, ComposedC
     }
 };
 
+// Specialization for group_by_stage
+template <class KeyGetter, class ComposedChain>
+struct custom_debug_printer<stages::group_by_stage<KeyGetter, ComposedChain>>
+{
+    template <class StageImpl>
+    static void print(std::ostream& strm, std::size_t depth)
+    {
+        using chain_type = typename StageImpl::chain_type;
+        using key_type = typename StageImpl::key_type;
+
+        strm << indent(depth) << "  Key type: " << std::quoted(type_name<key_type>()) << '\n';
+        strm << indent(depth) << "  Per-group chain:\n";
+        debug_print_chain<chain_type>(strm, depth + 2);
+    }
+};
+
 } // namespace descend::detail
 
 namespace descend {
