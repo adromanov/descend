@@ -246,15 +246,6 @@ TEST_CASE("tee with compositions")
     CHECK(max == "8");
 }
 
-// Helper to convert args<A, B> to std::pair<A, B>
-// Will be replaced by a proper dd::make_pair() stage later
-constexpr auto to_pair()
-{
-    return dd::transform([](auto&& a, auto&& b) {
-        return std::make_pair(std::forward<decltype(a)>(a), std::forward<decltype(b)>(b));
-    });
-}
-
 TEST_CASE("group_by consecutive runs")
 {
     // Input: [1, 1, 2, 2, 2, 1, 3, 3]
@@ -267,7 +258,7 @@ TEST_CASE("group_by consecutive runs")
             std::identity(),
             dd::to<std::vector>()
         ),
-        to_pair(),
+        dd::make_pair(),
         dd::for_each([&result](std::pair<int, std::vector<int>> p) {
             result.push_back(std::move(p));
         })
@@ -290,7 +281,7 @@ TEST_CASE("group_by with count - run length encoding")
             std::identity(),
             dd::count()
         ),
-        to_pair(),
+        dd::make_pair(),
         dd::to<std::vector>()
     );
 
@@ -308,7 +299,7 @@ TEST_CASE("group_by single element groups")
             std::identity(),
             dd::count()
         ),
-        to_pair(),
+        dd::make_pair(),
         dd::to<std::vector>()
     );
 
@@ -326,7 +317,7 @@ TEST_CASE("group_by single group")
             std::identity(),
             dd::to<std::vector>()
         ),
-        to_pair(),
+        dd::make_pair(),
         dd::to<std::vector>()
     );
 
@@ -342,7 +333,7 @@ TEST_CASE("group_by empty input")
             std::identity(),
             dd::count()
         ),
-        to_pair(),
+        dd::make_pair(),
         dd::to<std::vector>()
     );
 
@@ -358,7 +349,7 @@ TEST_CASE("group_by with transform in subchain")
             dd::transform([](int x) { return x * 10; }),
             dd::to<std::vector>()
         ),
-        to_pair(),
+        dd::make_pair(),
         dd::to<std::vector>()
     );
 
@@ -372,21 +363,40 @@ TEST_CASE("group_by with key extractor")
 {
     struct Item { int category; int value; };
 
-    auto result = dd::apply(
+    auto result1 = dd::apply(
         std::vector<Item>{{1, 10}, {1, 20}, {2, 30}, {2, 40}, {1, 50}},
         dd::group_by(
             &Item::category,
-            dd::transform([](const Item& item) { return item.value; }),
+            dd::transform(&Item::value),
             dd::to<std::vector>()
         ),
-        to_pair(),
+        dd::make_pair(),
         dd::to<std::vector>()
     );
 
-    REQUIRE(result.size() == 3);
-    CHECK(result[0] == std::pair{1, std::vector{10, 20}});
-    CHECK(result[1] == std::pair{2, std::vector{30, 40}});
-    CHECK(result[2] == std::pair{1, std::vector{50}});
+    REQUIRE(result1.size() == 3);
+    CHECK(result1[0] == std::pair{1, std::vector{10, 20}});
+    CHECK(result1[1] == std::pair{2, std::vector{30, 40}});
+    CHECK(result1[2] == std::pair{1, std::vector{50}});
+
+    auto result2 = dd::apply(
+        std::vector<Item>{{1, 10}, {1, 20}, {2, 30}, {2, 40}, {1, 50}},
+        dd::group_by(
+            &Item::category,
+            dd::transform(&Item::value),
+            dd::tee(
+                dd::to<std::vector>(),
+                dd::count())
+        ),
+        dd::expand(),
+        dd::make_tuple(),
+        dd::to<std::vector>()
+    );
+
+    REQUIRE(result2.size() == 3);
+    CHECK(result2[0] == std::tuple{1, std::vector{10, 20}, 2});
+    CHECK(result2[1] == std::tuple{2, std::vector{30, 40}, 2});
+    CHECK(result2[2] == std::tuple{1, std::vector{50}, 1});
 }
 
 } // namespace anonymous

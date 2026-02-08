@@ -20,6 +20,18 @@ namespace dd = descend;
 
 
 template <class T>
+std::ostream& operator << (std::ostream& s, const std::optional<T>& o);
+template <class T>
+std::ostream& operator << (std::ostream& s, const std::vector<T>& v);
+template <class T>
+std::ostream& operator << (std::ostream& strm, const dd::error_or<T>& x);
+template <class F, class S>
+std::ostream& operator << (std::ostream& strm, const std::pair<F, S>& p);
+template <class... Ts>
+std::ostream& operator << (std::ostream& strm, const std::tuple<Ts...>& t);
+
+
+template <class T>
 std::ostream& operator << (std::ostream& s, const std::optional<T>& o)
 {
     return o ? (s << '<' << *o << '>') : (s << "<empty>");
@@ -43,6 +55,22 @@ std::ostream& operator << (std::ostream& strm, const dd::error_or<T>& x)
         : (strm << "error=" << x.error());
 }
 
+template <class F, class S>
+std::ostream& operator << (std::ostream& strm, const std::pair<F, S>& p)
+{
+    return strm << '(' << p.first << ',' << p.second << ')';
+}
+
+template <class... Ts>
+std::ostream& operator << (std::ostream& strm, const std::tuple<Ts...>& t)
+{
+    std::apply([&strm, sep = ""] (const auto&... elems) mutable {
+        strm << '(';
+        ((strm << std::exchange(sep, ",") << elems), ...);
+        strm << ')';
+    }, t);
+    return strm;
+}
 
 
 auto pythagorean_triples()
@@ -233,7 +261,7 @@ void map_group_by_example()
         {4, true , "B"}
     };
 
-    dd::apply_debug(
+dd::apply_debug(
             employees,
             dd::map_group_by<std::unordered_map>(
                 &Employee::org,
@@ -298,6 +326,19 @@ int main()
                 std::cout << "Remainder " << key << ": " << count << " items\n";
             })
     );
+
+    // Group elements with same key and output the result of chain
+    // Run-length encoding
+    auto rle = dd::apply(
+        std::string_view{"aaabbaac"},
+        dd::group_by(
+            std::identity(), // key func is identity, meaning the character itself is a key
+            dd::count() // outputs count of elements with the same key
+        ),
+        dd::make_pair(), // previous stage produces multi-argument output, let's make a pair of it
+        dd::to<std::vector>()
+    );
+    std::cout << rle << '\n';
 
     // Enumerate
     dd::apply(
