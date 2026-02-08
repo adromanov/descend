@@ -51,10 +51,76 @@ When a stage carries data (functors, initial values, etc.), it must handle reusa
    ```
 
 **Stage Transitions**:
-- **Incremental → Incremental**: `transform`, `filter`, `take_n`, `expand`, `swizzle`, `flatten`, `flatten_forward`, `enumerate`, `zip_result`, `transform_arg`, `unwrap_optional`
-- **Incremental → Complete**: `max`, `to`, `for_each`, `count`, `accumulate` (accumulate/reduce then produce result)
+- **Incremental → Incremental**: `transform`, `filter`, `take_n`, `expand`, `swizzle`, `flatten`, `flatten_forward`, `enumerate`, `zip_result`, `transform_arg`, `unwrap_optional`, `make_pair`, `make_tuple`, `construct`
+- **Incremental → Complete**: `min`, `max`, `min_max`, `to`, `for_each`, `count`, `accumulate` (accumulate/reduce then produce result)
 - **Complete → Complete**: `sort`, `stable_sort`, `transform_complete`, `expand_complete`, `unwrap_optional_complete`
 - **Complete → Incremental**: Automatic via chain component (iterates input, calls `process_incremental`)
+
+### Base Stage Templates
+
+Two template classes reduce boilerplate for common stage patterns. They are not base classes in the inheritance sense - they are stage templates that generate complete stage implementations.
+
+#### `base_accumulate_stage<DisplayStage, MakeInit, UpdateOp>` (`stages/accumulate.hpp`)
+
+For incremental-to-complete (reducing) stages like `count`, `min`, `max`, `accumulate`.
+
+```cpp
+template <class DisplayStage, class MakeInit, class UpdateOp>
+struct base_accumulate_stage
+{
+    static constexpr auto style = stage_styles::incremental_to_complete;
+
+    MakeInit make_init;   // template<class Input> operator()() -> initial value
+    UpdateOp update_op;   // (Accum&, Input&&) -> void, updates accumulator
+
+    template <class Input>
+    struct impl
+    {
+        using display_stage_type = DisplayStage; // for debug output only
+        output_type output;
+
+        void process_incremental(Input&& input, Next&&) {
+            update_op(output, (Input&&) input);
+        }
+        auto end(Next&& next) {
+            return next.process_complete(std::forward<output_type>(output));
+        }
+    };
+};
+```
+
+**DisplayStage parameter**: Only used for debug printing. Without it, all stages would show as `base_accumulate_stage` in debug output instead of their actual names like `count_stage`, `max_stage`, etc.
+
+**Stages using this template**: `accumulate()`, `count()`, `min()`, `max()`, `min_max()`.
+
+#### `base_transform_stage<DisplayStage, Transform>` (`stages/transform.hpp`)
+
+For incremental-to-incremental transformation stages. Automatically unwraps `args<>` when calling the transform function.
+
+```cpp
+template <class DisplayStage, class Transform>
+struct base_transform_stage
+{
+    static constexpr auto style = stage_styles::incremental_to_incremental;
+
+    Transform transform;
+
+    template <class Input>
+    struct impl
+    {
+        using display_stage_type = DisplayStage; // for debug output only
+        using output_type = args_invoke_result_t<Transform&, Input&&>;
+
+        void process_incremental(Input&& input, Next&& next) {
+            next.process_incremental(args_invoke(transform, (Input&&) input));
+        }
+    };
+};
+```
+
+**Stages using this template**: `transform()`, `construct<T>()`, `make_pair()`, `make_tuple()`.
+
+**Key feature**: Uses `args_invoke()` to automatically unpack `args<...>` tuples, so transform functions receive individual arguments rather than the args wrapper.
 
 ### Iteration (`iterate.hpp`)
 
@@ -120,7 +186,7 @@ Multi-argument support for stages through `args<Ts...>` wrapper:
   - For `args<...>&&`: values become `T&&`, references preserved
   - For `const args<...>&`: everything becomes `const T&`
   - Non-const lvalue `args<...>&` is deleted (unclear semantics)
-- Used by: `expand()`, `zip_result()`, `flatten()`, `swizzle()`, `enumerate()`, `transform_arg()`
+- Used by: `expand()`, `zip_result()`, `flatten()`, `swizzle()`, `enumerate()`, `transform_arg()`, `make_pair()`, `make_tuple()`, `construct<T>()`
 
 **Reference Semantics**:
 ```cpp
@@ -331,7 +397,7 @@ dd::apply(
 - Output: `tuple<Result1, Result2, ...>`
 
 ### `map_group_by<Map>(key_getter, stages...)`
-Groups elements by key and processes each group through a chain:
+Groups elements by key globally and processes each group through a chain:
 
 ```cpp
 dd::apply(
@@ -351,7 +417,47 @@ dd::apply(
 - Incremental → Incremental
 - Template parameter: Map container template (e.g., `std::map`, `std::unordered_map`)
 - Creates one chain instance per unique key
+- Collects all elements globally before emitting
 - Output: `args<Key, ChainResult>` for each group
+
+### `group_by(key_getter, stages...)`
+Groups consecutive elements with the same key and emits groups as they complete (streaming):
+
+```cpp
+// Run-length encoding example
+dd::apply(
+    std::string_view{"aaabbaac"},
+    dd::group_by(
+        std::identity(),  // Key = the character itself
+        dd::count()
+    ),
+    dd::make_pair(),      // Convert args<char, size_t> to pair
+    dd::to<std::vector>()
+);
+// Result: [('a', 3), ('b', 2), ('a', 2), ('c', 1)]
+```
+
+**Properties**:
+- Incremental → Incremental
+- Groups consecutive elements only (not global grouping)
+- Emits each group when the key changes (streaming behavior)
+- Memory efficient: O(1) per group (only stores current group's chain)
+- Output: `args<Key, ChainResult>` for each consecutive run
+
+**Difference from `map_group_by`**:
+
+| Aspect | `group_by` | `map_group_by` |
+|--------|------------|----------------|
+| Grouping | Consecutive runs | Global (all with same key) |
+| Memory | O(1) per group | O(n) total |
+| Emission | Streaming (as groups complete) | Batch (all at end) |
+| Same key twice | Creates separate groups | Merged into one group |
+
+```cpp
+// Input: [1, 1, 2, 2, 1, 1]
+// group_by output:     (1, [1,1]), (2, [2,2]), (1, [1,1])  <- 3 groups
+// map_group_by output: (1, [1,1,1,1]), (2, [2,2])          <- 2 groups
+```
 
 ## Debug System (`debug.hpp`)
 
@@ -497,11 +603,16 @@ This allows:
 | `flatten_forward()` | Flatten nested iteration (unsafe) | Preserves T&& (use with care) |
 | `transform_arg<I>(f)` | Transform specific arg | `transform_arg<0>([](int x) { return x * 2; })` |
 | `unwrap_optional()` | Unwrap optional or short-circuit | `optional<T>` → `T`, nullopt stops chain |
+| `make_pair()` | Convert args to pair | `args<A, B>` → `std::pair<A, B>` |
+| `make_tuple()` | Convert args to tuple | `args<Ts...>` → `std::tuple<Ts...>` |
+| `construct<T>()` | Construct object from args | `args<Ts...>` → `T(Ts...)` |
 
 ### Incremental → Complete
 | Stage | Description | Output Type |
 |-------|-------------|-------------|
+| `min()` | Find minimum | `optional<T>` |
 | `max()` | Find maximum | `optional<T>` |
+| `min_max()` | Find both min and max | `optional<struct {T min, max;}>` |
 | `count()` | Count elements | `size_t` |
 | `accumulate(init, op)` | Reduce with binary op | Type of `init` (or first element) |
 | `to<Container>()` | Collect to container | `Container<T>` |
@@ -520,5 +631,6 @@ This allows:
 | Stage | Description | Example |
 |-------|-------------|---------|
 | `tee(chains...)` | Process through multiple pipelines | `tee(compose(filter(...), count()), compose(max()))` |
-| `map_group_by<Map>(key, stages...)` | Group by key, process each group | `map_group_by<std::map>([](auto x) { return x.category; }, count())` |
+| `map_group_by<Map>(key, stages...)` | Group globally by key | `map_group_by<std::map>([](auto x) { return x.category; }, count())` |
+| `group_by(key, stages...)` | Group consecutive runs by key | `group_by(std::identity(), count())` for run-length encoding |
 

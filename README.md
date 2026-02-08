@@ -75,9 +75,14 @@ dd::apply(
 - `flatten_forward()` - Same as above, but preserves T&&
 - `transform_arg<I>(f)` - Transform specific argument in args tuple
 - `unwrap_optional()` - Unwrap optional values or short-circuit on nullopt
+- `make_pair()` - Convert two-argument input (`args<A, B>`) to `std::pair<A, B>`
+- `make_tuple()` - Convert multi-argument input (`args<...>`) to `std::tuple<...>`
+- `construct<T>()` - Construct object of type `T` from pipeline arguments
 
 ### Incremental → Complete (reducing operations)
+- `min()` - Find minimum element (returns `optional<T>`)
 - `max()` - Find maximum element (returns `optional<T>`)
+- `min_max()` - Find both minimum and maximum (returns `optional<struct {T min, max;}>`)
 - `count()` - Count elements (returns `size_t`)
 - `accumulate(init, op)` - Reduce with binary operation
 - `to<Container>()` - Collect elements into container
@@ -95,7 +100,8 @@ dd::apply(
 ## Higher-Order Stages
 
 - `tee(subchain1, subchain2, ...)` - Process each element through multiple independent pipelines, collect results as tuple
-- `map_group_by<Map>(key_getter, stages...)` - Group elements by key, process each group through a pipeline
+- `map_group_by<Map>(key_getter, stages...)` - Group all elements by key globally, process each group through a pipeline
+- `group_by(key_getter, stages...)` - Group consecutive elements with same key, emit groups as they complete (streaming)
 
 ## Generators
 
@@ -280,40 +286,78 @@ See `stages.hpp` for complete examples.
 
 ## More Examples
 
-### Processing with indices
+### Run-length encoding with `group_by`
 
 ```cpp
-dd::apply(
-    std::vector{"apple", "banana", "cherry"},
-    dd::enumerate(1),  // Start from 1
-    dd::filter([](int idx, auto&&) { return idx % 2 == 1; }),  // Odd indices only
-    dd::for_each([](int idx, auto&& str) {
-        std::cout << idx << ". " << str << '\n';
-    })
+// group_by groups consecutive elements - perfect for run-length encoding
+auto rle = dd::apply(
+    std::string_view{"aaabbaac"},
+    dd::group_by(
+        std::identity(),  // Key = the character itself
+        dd::count()       // Count consecutive occurrences
+    ),
+    dd::make_pair(),      // Convert args<char, size_t> to pair
+    dd::to<std::vector>()
 );
-// Output:
-// 1. apple
-// 3. cherry
+// rle: [('a', 3), ('b', 2), ('a', 2), ('c', 1)]
+// Note: 'a' appears twice because group_by tracks consecutive runs
 ```
 
-### Grouping and aggregation
+### Finding statistics with `min_max`
 
 ```cpp
-struct Record { std::string category; double value; };
-std::vector<Record> records = /* ... */;
+struct Measurement { std::string sensor; double value; };
+std::vector<Measurement> data = {{"A", 23.5}, {"B", 18.2}, {"A", 25.1}, {"B", 17.8}};
 
+auto stats = dd::apply(
+    data,
+    dd::transform(&Measurement::value),
+    dd::min_max()
+);
+// stats: optional<{min: 17.8, max: 25.1}>
+
+if (stats) {
+    std::cout << "Range: " << stats->min << " to " << stats->max << '\n';
+}
+```
+
+### Constructing objects from pipeline data
+
+```cpp
+struct Point { int x, y; };
+
+auto points = dd::apply(
+    dd::iota(0, 5),
+    dd::zip_result([](int i) { return i * i; }),  // args<int, int>
+    dd::construct<Point>(),                        // Construct Point from args
+    dd::to<std::vector>()
+);
+// points: [{0,0}, {1,1}, {2,4}, {3,9}, {4,16}]
+```
+
+### Difference between `group_by` and `map_group_by`
+
+```cpp
+// group_by: consecutive grouping (streaming, emits as groups complete)
 dd::apply(
-    records,
-    dd::map_group_by<std::unordered_map>(
-        [](const Record& r) { return r.category; },
-        dd::transform([](const Record& r) { return r.value; }),
-        dd::accumulate(0.0, std::plus<>{})
-    ),
-    dd::for_each([](std::string&& cat, double sum) { // key is extracted from internal std::unordered_map
-        std::cout << cat << ": $" << sum << '\n';    // for std::map extraction is not performed (since it's log(N))
-                                                     // so const std::string& should be used
+    std::vector{1, 1, 2, 2, 1, 1},
+    dd::group_by(std::identity(), dd::to<std::vector>()),
+    dd::make_pair(),
+    dd::for_each([](int key, auto vec) {
+        std::cout << key << ": " << vec.size() << " items\n";
     })
 );
+// Output: 1: 2 items, 2: 2 items, 1: 2 items (three groups!)
+
+// map_group_by: global grouping (collects all, then emits)
+dd::apply(
+    std::vector{1, 1, 2, 2, 1, 1},
+    dd::map_group_by<std::map>(std::identity(), dd::to<std::vector>()),
+    dd::for_each([](int key, auto vec) {
+        std::cout << key << ": " << vec.size() << " items\n";
+    })
+);
+// Output: 1: 4 items, 2: 2 items (two groups - all 1s combined)
 ```
 
 ### Branching computation with tee
