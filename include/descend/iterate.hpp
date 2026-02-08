@@ -90,8 +90,9 @@ struct iterate_output<T>
                 return std::type_identity<typename range::value_type&&>{};
             }
             else {
-                using value_type = typename range::value_type;
-                return std::type_identity<decltype(forward_like<T>(std::declval<value_type>()))>{};
+                // for string_view the value_type is char, but iterator always produces const char&
+                using std::begin;
+                return std::type_identity<decltype(forward_like<T>(*begin(std::declval<T &>())))>{};
             }
         }
         else if constexpr (std::is_array_v<range>) {
