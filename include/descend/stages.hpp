@@ -6,6 +6,7 @@
 #include "descend/iterate.hpp"
 #include "descend/stage_styles.hpp"
 #include "descend/stages/accumulate.hpp" // IWYU pragma: export
+#include "descend/stages/transform.hpp"  // IWYU pragma: export
 
 #include <algorithm>
 #include <cstddef>
@@ -38,44 +39,6 @@ When stage carries some data, there should be:
 That's because stages can be used in higher order stages like map_group_by, which could create
 chains from stages several times.
 */
-
-template <class F>
-struct transform_stage
-{
-    static constexpr auto style = stage_styles::incremental_to_incremental;
-
-    [[no_unique_address]]
-    F f;
-
-    template <class Input>
-    struct impl
-    {
-        using input_type = Input;
-        using output_type = args_invoke_result_t<F, Input>;
-        using stage_type = transform_stage;
-
-        [[no_unique_address]]
-        F f;
-
-        template <class Next>
-        constexpr void process_incremental(Input&& input, Next&& next)
-        {
-            next.process_incremental(args_invoke(f, (Input&&) input));
-        }
-    };
-
-    template <class Input>
-    constexpr auto make_impl() &&
-    {
-        return impl<Input>{(F&&)f};
-    }
-
-    template <class Input>
-    constexpr auto make_impl() &
-    {
-        return impl<Input>{f};
-    }
-};
 
 
 template <class F>
@@ -844,11 +807,6 @@ struct enumerate_stage
 
 inline namespace stages {
 
-template <class F>
-constexpr auto transform(F&& f)
-{
-    return detail::stages::transform_stage<F>{(F&&) f};
-}
 template <class F>
 constexpr auto transform_complete(F&& f)
 {

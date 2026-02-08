@@ -93,6 +93,21 @@ constexpr decltype(auto) args_invoke(F&& f, Arg&& arg)
     }
 }
 
+template <class F, class Arg>
+constexpr bool is_args_invocable_helper()
+{
+    if constexpr (is_specialization_of_v<args, std::remove_cvref_t<Arg>>) {
+        return [&] <std::size_t... Is> (std::index_sequence<Is...>) {
+            return std::is_invocable_v<F, decltype(get<Is>(std::declval<Arg>()))...>;
+        } (make_index_sequence_for_args<Arg>{});
+    }
+    else {
+        return std::is_invocable_v<F, Arg>;
+    }
+}
+template <class F, class Arg>
+inline constexpr bool is_args_invocable_v = is_args_invocable_helper<F, Arg>();
+
 
 template <class F, class Arg>
 using args_invoke_result_t = decltype(args_invoke(std::declval<F>(), std::declval<Arg>()));

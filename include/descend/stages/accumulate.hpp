@@ -1,16 +1,12 @@
 #pragma once
 
-#include "descend/args.hpp"
-#include "descend/finalize.hpp"
 #include "descend/helpers.hpp"
-#include "descend/iterate.hpp"
 #include "descend/stage_styles.hpp"
 
 #include <algorithm>
 #include <cstddef>
 #include <functional>
 #include <optional>
-#include <tuple>
 #include <type_traits>
 #include <utility>
 
